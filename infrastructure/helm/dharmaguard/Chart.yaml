@@ -1,0 +1,48 @@
+apiVersion: v2
+name: dharmaguard
+description: DharmaGuard SME Broker Compliance Platform Helm Chart
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://dharmaguard.com
+sources:
+  - https://github.com/your-org/dharmaguard
+maintainers:
+  - name: DharmaGuard Team
+    email: team@dharmaguard.com
+    url: https://dharmaguard.com
+keywords:
+  - fintech
+  - compliance
+  - surveillance
+  - trading
+  - sebi
+  - broker
+annotations:
+  category: Financial Technology
+  licenses: Apache-2.0
+dependencies:
+  - name: postgresql
+    version: "13.2.24"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+  - name: redis
+    version: "18.4.0"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+  - name: kafka
+    version: "26.4.3"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: kafka.enabled
+  - name: prometheus
+    version: "25.6.0"
+    repository: "https://prometheus-community.github.io/helm-charts"
+    condition: monitoring.prometheus.enabled
+  - name: grafana
+    version: "7.0.19"
+    repository: "https://grafana.github.io/helm-charts"
+    condition: monitoring.grafana.enabled
+  - name: jaeger
+    version: "0.71.14"
+    repository: "https://jaegertracing.github.io/helm-charts"
+    condition: monitoring.jaeger.enabled
