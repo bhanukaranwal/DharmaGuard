@@ -1,0 +1,285 @@
+name: Continuous Deployment
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types:
+      - completed
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event.workflow_run.conclusion == 'success'
+    environment:
+      name: staging
+      url: https://staging.dharmaguard.com
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.29.0'
+
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.14.0'
+
+    - name: Configure kubectl
+      run: |
+        mkdir -p $HOME/.kube
+        echo "$KUBE_CONFIG_DATA" | base64 --decode > $HOME/.kube/config
+
+    - name: Add Helm repositories
+      run: |
+        helm repo add bitnami https://charts.bitnami.com/bitnami
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+        helm repo update
+
+    - name: Deploy infrastructure dependencies
+      run: |
+        # PostgreSQL
+        helm upgrade --install postgres bitnami/postgresql \
+          --namespace dharmaguard-staging --create-namespace \
+          --set auth.postgresPassword="${{ secrets.POSTGRES_PASSWORD }}" \
+          --set auth.database="dharmaguard" \
+          --set persistence.size="100Gi" \
+          --set metrics.enabled=true
+
+        # Redis
+        helm upgrade --install redis bitnami/redis \
+          --namespace dharmaguard-staging \
+          --set auth.password="${{ secrets.REDIS_PASSWORD }}" \
+          --set master.persistence.size="50Gi" \
+          --set metrics.enabled=true
+
+        # Kafka
+        helm upgrade --install kafka bitnami/kafka \
+          --namespace dharmaguard-staging \
+          --set persistence.size="100Gi" \
+          --set zookeeper.persistence.size="50Gi" \
+          --set metrics.kafka.enabled=true
+
+    - name: Deploy monitoring stack
+      run: |
+        # Prometheus
+        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+          --namespace dharmaguard-monitoring --create-namespace \
+          --set grafana.adminPassword="${{ secrets.GRAFANA_PASSWORD }}" \
+          --set grafana.persistence.enabled=true \
+          --set prometheus.prometheusSpec.retention="30d" \
+          --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage="200Gi"
+
+        # Jaeger
+        helm upgrade --install jaeger jaegertracing/jaeger \
+          --namespace dharmaguard-monitoring \
+          --set storage.type=elasticsearch
+
+    - name: Update image tags
+      run: |
+        # Get latest commit SHA for image tags
+        COMMIT_SHA=$(git rev-parse HEAD)
+        sed -i "s/latest/${COMMIT_SHA}/g" infrastructure/helm/dharmaguard/values-staging.yaml
+
+    - name: Deploy DharmaGuard application
+      run: |
+        helm upgrade --install dharmaguard infrastructure/helm/dharmaguard \
+          --namespace dharmaguard-staging \
+          --values infrastructure/helm/dharmaguard/values-staging.yaml \
+          --set image.tag=${GITHUB_SHA} \
+          --set secrets.jwtSecret="${{ secrets.JWT_SECRET }}" \
+          --set secrets.sebiApiKey="${{ secrets.SEBI_API_KEY }}" \
+          --wait --timeout=600s
+
+    - name: Run smoke tests
+      run: |
+        # Wait for pods to be ready
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=dharmaguard -n dharmaguard-staging --timeout=300s
+
+        # Run basic health checks
+        kubectl run smoke-test --rm -i --restart=Never --image=curlimages/curl:latest -n dharmaguard-staging -- \
+          curl -f http://api-gateway-service:8080/health
+
+    - name: Notify staging deployment
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: "🚀 Successfully deployed to staging: https://staging.dharmaguard.com"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+      url: https://dharmaguard.com
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.29.0'
+
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.14.0'
+
+    - name: Configure kubectl
+      run: |
+        mkdir -p $HOME/.kube
+        echo "$KUBE_CONFIG_DATA_PROD" | base64 --decode > $HOME/.kube/config
+      env:
+        KUBE_CONFIG_DATA_PROD: ${{ secrets.KUBE_CONFIG_DATA_PROD }}
+
+    - name: Extract version
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Pre-deployment backup
+      run: |
+        # Backup current production database
+        kubectl create job --from=cronjob/postgres-backup backup-pre-deploy-$(date +%Y%m%d-%H%M%S) -n dharmaguard
+
+    - name: Blue-Green deployment preparation
+      run: |
+        # Create new deployment with blue-green strategy
+        helm upgrade dharmaguard-green infrastructure/helm/dharmaguard \
+          --namespace dharmaguard \
+          --values infrastructure/helm/dharmaguard/values-production.yaml \
+          --set image.tag=${{ steps.version.outputs.VERSION }} \
+          --set deployment.strategy=blue-green \
+          --set service.selector=green \
+          --wait --timeout=900s
+
+    - name: Run production tests
+      run: |
+        # Run comprehensive tests against green deployment
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=dharmaguard-green -n dharmaguard --timeout=600s
+        
+        # Performance tests
+        kubectl run perf-test --rm -i --restart=Never --image=loadimpact/k6:latest -n dharmaguard -- \
+          run --vus 100 --duration 60s - <<EOF
+        import http from 'k6/http';
+        export default function() {
+          http.get('http://dharmaguard-green-service:8080/health');
+        }
+        EOF
+
+    - name: Switch traffic to green deployment
+      run: |
+        # Switch traffic from blue to green
+        kubectl patch service dharmaguard-service -n dharmaguard -p '{"spec":{"selector":{"deployment":"green"}}}'
+
+    - name: Verify production deployment
+      run: |
+        # Monitor deployment for 5 minutes
+        sleep 300
+        
+        # Check error rates and response times
+        ERROR_RATE=$(kubectl get --raw "/api/v1/namespaces/dharmaguard-monitoring/services/prometheus-server:80/proxy/api/v1/query?query=rate(http_requests_total{status=~'5..'}[5m])" | jq '.data.result[0].value[1] // 0')
+        
+        if (( $(echo "$ERROR_RATE > 0.01" | bc -l) )); then
+          echo "Error rate too high: $ERROR_RATE"
+          exit 1
+        fi
+
+    - name: Cleanup old blue deployment
+      run: |
+        # Remove old blue deployment after successful verification
+        helm uninstall dharmaguard-blue -n dharmaguard || true
+
+    - name: Update DNS and CDN
+      run: |
+        # Update CloudFlare DNS to point to new deployment
+        curl -X PUT "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/dns_records/${{ secrets.CLOUDFLARE_DNS_RECORD_ID }}" \
+          -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          --data '{"type":"A","name":"dharmaguard.com","content":"${{ secrets.PRODUCTION_IP }}"}'
+
+    - name: Create GitHub release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.version.outputs.VERSION }}
+        release_name: DharmaGuard ${{ steps.version.outputs.VERSION }}
+        body: |
+          ## Changes in this Release
+          - Automated deployment via GitHub Actions
+          - Production-ready with blue-green deployment strategy
+          - Comprehensive monitoring and alerting
+          
+          ## Deployment Info
+          - Deployed at: $(date)
+          - Commit: ${{ github.sha }}
+          - Environment: Production
+        draft: false
+        prerelease: false
+
+    - name: Notify production deployment
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: "🎉 Successfully deployed ${{ steps.version.outputs.VERSION }} to production!"
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  rollback:
+    name: Rollback Production
+    runs-on: ubuntu-latest
+    if: failure() && github.ref == 'refs/heads/main'
+    steps:
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.29.0'
+
+    - name: Configure kubectl
+      run: |
+        mkdir -p $HOME/.kube
+        echo "$KUBE_CONFIG_DATA_PROD" | base64 --decode > $HOME/.kube/config
+      env:
+        KUBE_CONFIG_DATA_PROD: ${{ secrets.KUBE_CONFIG_DATA_PROD }}
+
+    - name: Rollback to previous version
+      run: |
+        helm rollback dharmaguard -n dharmaguard
+        kubectl rollout status deployment/dharmaguard -n dharmaguard --timeout=300s
+
+    - name: Notify rollback
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        text: "⚠️ Production rollback completed due to deployment failure"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  cleanup:
+    name: Cleanup Resources
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [deploy-staging, deploy-production]
+    steps:
+    - name: Cleanup temporary resources
+      run: |
+        echo "Cleaning up temporary deployment resources"
+        # Add cleanup logic for temporary resources
