@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dharmaguard-config
+  namespace: dharmaguard
+data:
+  # Database configuration
+  POSTGRES_HOST: "postgres-service"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "dharmaguard"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  CLICKHOUSE_HOST: "clickhouse-service"
+  CLICKHOUSE_PORT: "8123"
+  
+  # Kafka configuration
+  KAFKA_BROKERS: "kafka-service:9092"
+  KAFKA_TOPICS: "trades,alerts,audit-logs,notifications"
+  
+  # Service URLs
+  SURVEILLANCE_ENGINE_URL: "surveillance-engine-service:50051"
+  USER_SERVICE_URL: "http://user-service:8081"
+  COMPLIANCE_SERVICE_URL: "http://compliance-service:8082"
+  REPORTING_SERVICE_URL: "http://reporting-service:8083"
+  AUDIT_SERVICE_URL: "http://audit-service:8084"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
+  
+  # API Gateway configuration
+  API_GATEWAY_PORT: "8080"
+  RATE_LIMIT_REQUESTS_PER_MINUTE: "1000"
+  RATE_LIMIT_BURST_SIZE: "100"
+  
+  # Observability
+  JAEGER_ENDPOINT: "http://jaeger-collector:14268/api/traces"
+  PROMETHEUS_URL: "http://prometheus:9090"
+  
+  # Environment
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  
+  # Surveillance Engine Configuration
+  surveillance-engine.yaml: |
+    surveillance:
+      num_threads: 16
+      queue_size: 1000000
+      patterns:
+        - name: "pump_and_dump"
+          enabled: true
+          sensitivity: 0.85
+          lookback_window: "5m"
+        - name: "layering"
+          enabled: true
+          sensitivity: 0.90
+          order_ratio_threshold: 10
+        - name: "wash_trading"
+          enabled: true
+          network_analysis: true
+          time_window: "1h"
+        - name: "insider_trading"
+          enabled: true
+          event_correlation: true
+          abnormal_volume_threshold: 200
+        - name: "front_running"
+          enabled: true
+          sequence_analysis: true
+          time_threshold: "30s"
+      risk_limits:
+        max_position_size: 1000000
+        max_daily_loss: 50000
+        var_confidence: 0.99
