@@ -1,0 +1,864 @@
+openapi: 3.0.3
+info:
+  title: DharmaGuard API
+  description: |
+    Comprehensive API for DharmaGuard SME Broker Compliance Platform
+    
+    This API provides access to all DharmaGuard services including:
+    - User management and authentication
+    - Real-time surveillance and pattern detection
+    - Compliance reporting and regulatory submissions
+    - Trading data management
+    - Audit trails and system monitoring
+    
+    ## Authentication
+    All API endpoints require JWT authentication unless otherwise specified.
+    Include the JWT token in the Authorization header:
+    ```
+    Authorization: Bearer <your-jwt-token>
+    ```
+    
+    ## Rate Limiting
+    API requests are rate limited to 1000 requests per minute per user.
+    Rate limit headers are included in all responses.
+    
+    ## Error Handling
+    The API uses standard HTTP response codes and returns detailed error messages in JSON format.
+  version: 1.0.0
+  contact:
+    name: DharmaGuard API Support
+    url: https://dharmaguard.com/support
+    email: api-support@dharmaguard.com
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: https://api.dharmaguard.com
+    description: Production server
+  - url: https://staging-api.dharmaguard.com
+    description: Staging server
+  - url: http://localhost:8080
+    description: Local development server
+
+security:
+  - BearerAuth: []
+
+paths:
+  # Health Check
+  /health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: Check if the API is running and accessible
+      security: []
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  timestamp:
+                    type: string
+                    format: date-time
+                  version:
+                    type: string
+                    example: "1.0.0"
+
+  # Authentication
+  /api/v1/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: Authenticate user and receive JWT token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  example: "admin"
+                password:
+                  type: string
+                  format: password
+                mfa_code:
+                  type: string
+                  description: MFA code if MFA is enabled
+                  example: "123456"
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  refresh_token:
+                    type: string
+                  expires_in:
+                    type: integer
+                    example: 86400
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/v1/auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh JWT token
+      description: Get a new access token using refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refresh_token
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  expires_in:
+                    type: integer
+
+  # User Management
+  /api/v1/users:
+    get:
+      tags:
+        - Users
+      summary: List users
+      description: Get paginated list of users
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: role
+          in: query
+          schema:
+            $ref: '#/components/schemas/UserRole'
+        - name: is_active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Users retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationInfo'
+
+    post:
+      tags:
+        - Users
+      summary: Create user
+      description: Create a new user account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/v1/users/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    
+    get:
+      tags:
+        - Users
+      summary: Get user
+      description: Get user by ID
+      responses:
+        '200':
+          description: User retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags:
+        - Users
+      summary: Update user
+      description: Update user information
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+    delete:
+      tags:
+        - Users
+      summary: Delete user
+      description: Soft delete user account
+      responses:
+        '204':
+          description: User deleted successfully
+
+  # Surveillance
+  /api/v1/surveillance/alerts:
+    get:
+      tags:
+        - Surveillance
+      summary: List surveillance alerts
+      description: Get paginated list of surveillance alerts
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/AlertStatus'
+        - name: severity
+          in: query
+          schema:
+            $ref: '#/components/schemas/AlertSeverity'
+        - name: pattern_type
+          in: query
+          schema:
+            type: string
+            example: "pump_and_dump"
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Alerts retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SurveillanceAlert'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationInfo'
+
+  /api/v1/surveillance/alerts/{alertId}:
+    parameters:
+      - name: alertId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    
+    get:
+      tags:
+        - Surveillance
+      summary: Get surveillance alert
+      description: Get detailed information about a surveillance alert
+      responses:
+        '200':
+          description: Alert retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurveillanceAlert'
+
+    patch:
+      tags:
+        - Surveillance
+      summary: Update surveillance alert
+      description: Update alert status and investigation details
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  $ref: '#/components/schemas/AlertStatus'
+                assigned_to:
+                  type: string
+                  format: uuid
+                notes:
+                  type: string
+                resolution:
+                  type: string
+      responses:
+        '200':
+          description: Alert updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurveillanceAlert'
+
+  /api/v1/surveillance/statistics:
+    get:
+      tags:
+        - Surveillance
+      summary: Get surveillance statistics
+      description: Get real-time surveillance system statistics
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [hour, day, week, month]
+            default: day
+      responses:
+        '200':
+          description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurveillanceStatistics'
+
+  # Trading
+  /api/v1/trading/trades:
+    get:
+      tags:
+        - Trading
+      summary: List trades
+      description: Get paginated list of trades
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: account_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: instrument
+          in: query
+          schema:
+            type: string
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Trades retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trade'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationInfo'
+
+  # Compliance
+  /api/v1/compliance/reports:
+    get:
+      tags:
+        - Compliance
+      summary: List compliance reports
+      description: Get list of generated compliance reports
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: report_type
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [DRAFT, GENERATED, SUBMITTED, ACKNOWLEDGED]
+      responses:
+        '200':
+          description: Reports retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ComplianceReport'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationInfo'
+
+    post:
+      tags:
+        - Compliance
+      summary: Generate compliance report
+      description: Generate a new compliance report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateReportRequest'
+      responses:
+        '201':
+          description: Report generation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComplianceReport'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of items to return
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    
+    Offset:
+      name: offset
+      in: query
+      description: Number of items to skip
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: User ID
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    User:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+        is_active:
+          type: boolean
+        is_verified:
+          type: boolean
+        mfa_enabled:
+          type: boolean
+        last_login_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    UserRole:
+      type: string
+      enum:
+        - SUPER_ADMIN
+        - TENANT_ADMIN
+        - COMPLIANCE_OFFICER
+        - TRADER
+        - VIEWER
+
+    CreateUserRequest:
+      type: object
+      required:
+        - username
+        - email
+        - password
+        - role
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 12
+        role:
+          $ref: '#/components/schemas/UserRole'
+        tenant_id:
+          type: string
+          format: uuid
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+        is_active:
+          type: boolean
+
+    SurveillanceAlert:
+      type: object
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        pattern_type:
+          type: string
+          example: "pump_and_dump"
+        severity:
+          $ref: '#/components/schemas/AlertSeverity'
+        status:
+          $ref: '#/components/schemas/AlertStatus'
+        title:
+          type: string
+        description:
+          type: string
+        risk_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+        confidence_level:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+        detection_timestamp:
+          type: string
+          format: date-time
+        assigned_to:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    AlertSeverity:
+      type: string
+      enum:
+        - LOW
+        - MEDIUM
+        - HIGH
+        - CRITICAL
+
+    AlertStatus:
+      type: string
+      enum:
+        - OPEN
+        - INVESTIGATING
+        - RESOLVED
+        - FALSE_POSITIVE
+
+    Trade:
+      type: object
+      properties:
+        trade_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        instrument_id:
+          type: string
+          format: uuid
+        trade_type:
+          type: string
+          enum: [BUY, SELL, SHORT_SELL, COVER]
+        quantity:
+          type: integer
+          minimum: 1
+        price:
+          type: number
+          format: double
+          minimum: 0
+        value:
+          type: number
+          format: double
+        trade_time:
+          type: string
+          format: date-time
+        exchange:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ComplianceReport:
+      type: object
+      properties:
+        report_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        report_type:
+          type: string
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [DRAFT, GENERATED, SUBMITTED, ACKNOWLEDGED]
+        generated_at:
+          type: string
+          format: date-time
+        submitted_at:
+          type: string
+          format: date-time
+        sebi_reference:
+          type: string
+
+    GenerateReportRequest:
+      type: object
+      required:
+        - report_type
+        - period_start
+        - period_end
+      properties:
+        report_type:
+          type: string
+          enum: [DAILY_TRADING_SUMMARY, MONTHLY_COMPLIANCE, STR]
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        format:
+          type: string
+          enum: [PDF, CSV, JSON, XML]
+          default: PDF
+
+    SurveillanceStatistics:
+      type: object
+      properties:
+        total_trades_processed:
+          type: integer
+        total_alerts_generated:
+          type: integer
+        active_patterns:
+          type: integer
+        average_processing_time_ms:
+          type: number
+        throughput_trades_per_second:
+          type: number
+        compliance_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+
+    PaginationInfo:
+      type: object
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        has_more:
+          type: boolean
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Bad Request"
+            message: "Invalid input parameters"
+            code: "INVALID_INPUT"
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Unauthorized"
+            message: "Invalid or expired token"
+            code: "INVALID_TOKEN"
+
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Forbidden"
+            message: "Insufficient permissions"
+            code: "INSUFFICIENT_PERMISSIONS"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Not Found"
+            message: "Resource not found"
+            code: "RESOURCE_NOT_FOUND"
+
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Conflict"
+            message: "Resource already exists"
+            code: "RESOURCE_EXISTS"
+
+    TooManyRequests:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Too Many Requests"
+            message: "Rate limit exceeded"
+            code: "RATE_LIMIT_EXCEEDED"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Internal Server Error"
+            message: "An unexpected error occurred"
+            code: "INTERNAL_ERROR"
+
+tags:
+  - name: System
+    description: System health and status endpoints
+  - name: Authentication
+    description: User authentication and authorization
+  - name: Users
+    description: User management operations
+  - name: Surveillance
+    description: Trade surveillance and pattern detection
+  - name: Trading
+    description: Trading data and operations
+  - name: Compliance
+    description: Compliance reporting and regulatory submissions
