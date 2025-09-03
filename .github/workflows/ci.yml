@@ -1,0 +1,395 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Security and Code Quality
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run CodeQL Analysis
+      uses: github/codeql-action/init@v3
+      with:
+        languages: cpp, javascript, go, python
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+  # Core Engine (C++) Tests
+  core-engine-test:
+    name: Core Engine Tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build \
+          libboost-all-dev libtbb-dev libprotobuf-dev protobuf-compiler \
+          libgrpc++-dev protobuf-compiler-grpc libpq-dev libhiredis-dev \
+          librdkafka-dev libspdlog-dev libbenchmark-dev libgtest-dev
+
+    - name: Configure and build
+      working-directory: core-engine
+      run: |
+        mkdir -p build
+        cd build
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+        ninja -j$(nproc)
+
+    - name: Run unit tests
+      working-directory: core-engine/build
+      run: ctest --output-on-failure --parallel $(nproc)
+
+    - name: Run benchmarks
+      working-directory: core-engine/build
+      run: ./performance_benchmarks --benchmark_format=json --benchmark_out=benchmark_results.json
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: core-engine/build/benchmark_results.json
+
+  # User Service (Rust) Tests
+  user-service-test:
+    name: User Service Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+        override: true
+
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo build
+      uses: actions/cache@v3
+      with:
+        path: microservices/user-service/target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Check formatting
+      working-directory: microservices/user-service
+      run: cargo fmt -- --check
+
+    - name: Run clippy
+      working-directory: microservices/user-service
+      run: cargo clippy -- -D warnings
+
+    - name: Run tests
+      working-directory: microservices/user-service
+      env:
+        DATABASE_URL: postgres://postgres:testpass@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379
+      run: cargo test
+
+  # API Gateway (Go) Tests
+  api-gateway-test:
+    name: API Gateway Tests
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.22'
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      working-directory: api-gateway
+      run: go mod download
+
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        working-directory: api-gateway
+
+    - name: Run tests
+      working-directory: api-gateway
+      env:
+        REDIS_URL: localhost:6379
+      run: go test -v -race -coverprofile=coverage.out ./...
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: api-gateway/coverage.out
+        flags: api-gateway
+
+  # Frontend (Next.js) Tests
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install dependencies
+      working-directory: frontend
+      run: npm ci
+
+    - name: Run ESLint
+      working-directory: frontend
+      run: npm run lint
+
+    - name: Run type check
+      working-directory: frontend
+      run: npm run type-check
+
+    - name: Run tests
+      working-directory: frontend
+      run: npm run test:ci
+
+    - name: Build application
+      working-directory: frontend
+      run: npm run build
+
+    - name: Run Lighthouse CI
+      uses: treosh/lighthouse-ci-action@v10
+      with:
+        configPath: frontend/.lighthouserc.js
+        uploadArtifacts: true
+
+  # Integration Tests
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [core-engine-test, user-service-test, api-gateway-test]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: integration_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Start services with Docker Compose
+      run: |
+        cp .env.example .env
+        docker-compose -f docker-compose.test.yml up -d
+        sleep 30  # Wait for services to start
+
+    - name: Run integration tests
+      run: |
+        docker-compose -f docker-compose.test.yml exec -T api-gateway go test -tags integration ./tests/integration/...
+
+    - name: Collect logs
+      if: failure()
+      run: |
+        docker-compose -f docker-compose.test.yml logs > integration-test-logs.txt
+
+    - name: Upload logs
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: integration-test-logs
+        path: integration-test-logs.txt
+
+    - name: Stop services
+      if: always()
+      run: docker-compose -f docker-compose.test.yml down
+
+  # Build and push Docker images
+  build-images:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [security-scan, core-engine-test, user-service-test, api-gateway-test, frontend-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        component:
+          - surveillance-engine
+          - user-service
+          - api-gateway
+          - frontend
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.component }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./${{ matrix.component }}
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Performance Tests
+  performance-test:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: [build-images]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install k6
+      run: |
+        sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+        echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+        sudo apt-get update
+        sudo apt-get install k6
+
+    - name: Deploy test environment
+      run: |
+        # Deploy using Docker Compose with performance configuration
+        docker-compose -f docker-compose.perf.yml up -d
+        sleep 60  # Wait for services to start
+
+    - name: Run load tests
+      run: |
+        k6 run --summary-trend-stats="avg,min,med,max,p(95),p(99)" testing/load/api-gateway.js
+        k6 run --summary-trend-stats="avg,min,med,max,p(95),p(99)" testing/load/surveillance-engine.js
+
+    - name: Cleanup
+      if: always()
+      run: docker-compose -f docker-compose.perf.yml down
+
+  # Notify on completion
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [integration-test, performance-test]
+    if: always()
+    steps:
+    - name: Notify on success
+      if: needs.integration-test.result == 'success' && needs.performance-test.result == 'success'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: "✅ CI Pipeline completed successfully for ${{ github.ref }}"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+    - name: Notify on failure
+      if: needs.integration-test.result == 'failure' || needs.performance-test.result == 'failure'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        text: "❌ CI Pipeline failed for ${{ github.ref }}"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
