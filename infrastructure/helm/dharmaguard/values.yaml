@@ -1,0 +1,579 @@
+# DharmaGuard Helm Chart Values
+# Default configuration for development environment
+
+global:
+  imageRegistry: "ghcr.io/your-org"
+  imagePullPolicy: IfNotPresent
+  storageClass: "gp2"
+  
+  # Global labels applied to all resources
+  labels:
+    app.kubernetes.io/name: dharmaguard
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: helm
+
+# Application configuration
+app:
+  name: dharmaguard
+  version: "1.0.0"
+  environment: development
+
+# Image configuration
+image:
+  registry: ghcr.io/your-org
+  tag: latest
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Core Surveillance Engine
+surveillanceEngine:
+  enabled: true
+  name: surveillance-engine
+  
+  image:
+    repository: dharmaguard-surveillance-engine
+    tag: latest
+  
+  replicaCount: 3
+  
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  
+  service:
+    type: ClusterIP
+    grpcPort: 50051
+    metricsPort: 8080
+  
+  # Surveillance configuration
+  config:
+    numThreads: 16
+    queueSize: 1000000
+    patterns:
+      pumpAndDump:
+        enabled: true
+        sensitivity: 0.85
+      layering:
+        enabled: true
+        sensitivity: 0.90
+      washTrading:
+        enabled: true
+      insiderTrading:
+        enabled: true
+      frontRunning:
+        enabled: true
+  
+  # Persistence for logs and temporary data
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  
+  # Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# User Service (Rust)
+userService:
+  enabled: true
+  name: user-service
+  
+  image:
+    repository: dharmaguard-user-service
+    tag: latest
+  
+  replicaCount: 2
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  service:
+    type: ClusterIP
+    port: 8081
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+# Compliance Service (Rust)
+complianceService:
+  enabled: true
+  name: compliance-service
+  
+  image:
+    repository: dharmaguard-compliance-service
+    tag: latest
+  
+  replicaCount: 2
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  service:
+    type: ClusterIP
+    port: 8082
+
+# Reporting Service (Rust)
+reportingService:
+  enabled: true
+  name: reporting-service
+  
+  image:
+    repository: dharmaguard-reporting-service
+    tag: latest
+  
+  replicaCount: 2
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  
+  service:
+    type: ClusterIP
+    port: 8083
+
+# Audit Service (Rust)
+auditService:
+  enabled: true
+  name: audit-service
+  
+  image:
+    repository: dharmaguard-audit-service
+    tag: latest
+  
+  replicaCount: 2
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  service:
+    type: ClusterIP
+    port: 8084
+
+# Notification Service (Rust)
+notificationService:
+  enabled: true
+  name: notification-service
+  
+  image:
+    repository: dharmaguard-notification-service
+    tag: latest
+  
+  replicaCount: 2
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  service:
+    type: ClusterIP
+    port: 8085
+
+# API Gateway (Go)
+apiGateway:
+  enabled: true
+  name: api-gateway
+  
+  image:
+    repository: dharmaguard-api-gateway
+    tag: latest
+  
+  replicaCount: 3
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  service:
+    type: LoadBalancer
+    port: 8080
+    metricsPort: 9090
+  
+  # Rate limiting configuration
+  rateLimit:
+    requestsPerMinute: 1000
+    burstSize: 100
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# Frontend (Next.js)
+frontend:
+  enabled: true
+  name: frontend
+  
+  image:
+    repository: dharmaguard-frontend
+    tag: latest
+  
+  replicaCount: 2
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  service:
+    type: ClusterIP
+    port: 3000
+  
+  # Environment variables for frontend
+  env:
+    NEXT_PUBLIC_API_URL: "https://api.dharmaguard.com"
+    NODE_ENV: "production"
+
+# ML Platform (Python)
+mlPlatform:
+  enabled: true
+  name: ml-platform
+  
+  image:
+    repository: dharmaguard-ml-platform
+    tag: latest
+  
+  replicaCount: 1
+  
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  
+  service:
+    type: ClusterIP
+    port: 8090
+  
+  # GPU support
+  gpu:
+    enabled: false
+    count: 1
+  
+  # Persistence for model storage
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: ""
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+  
+  hosts:
+    - host: dharmaguard.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+        - path: /api
+          pathType: Prefix
+          service: api-gateway
+    - host: api.dharmaguard.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: api-gateway
+  
+  tls:
+    - secretName: dharmaguard-tls
+      hosts:
+        - dharmaguard.com
+        - api.dharmaguard.com
+
+# External dependencies
+postgresql:
+  enabled: true
+  auth:
+    username: dharmaguard
+    password: "secure-password-123"
+    database: dharmaguard
+  
+  primary:
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+    
+    persistence:
+      enabled: true
+      size: 100Gi
+  
+  metrics:
+    enabled: true
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: "redis-password-123"
+  
+  master:
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    
+    persistence:
+      enabled: true
+      size: 20Gi
+  
+  metrics:
+    enabled: true
+
+kafka:
+  enabled: true
+  
+  controller:
+    replicaCount: 3
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+  
+  broker:
+    replicaCount: 3
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+    
+    persistence:
+      enabled: true
+      size: 100Gi
+  
+  metrics:
+    kafka:
+      enabled: true
+    jmx:
+      enabled: true
+
+# Monitoring stack
+monitoring:
+  prometheus:
+    enabled: true
+    server:
+      persistentVolume:
+        enabled: true
+        size: 50Gi
+      resources:
+        requests:
+          memory: "1Gi"
+          cpu: "500m"
+        limits:
+          memory: "2Gi"
+          cpu: "1000m"
+  
+  grafana:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 10Gi
+    
+    adminPassword: "grafana-admin-123"
+    
+    dashboards:
+      default_dashboards_enabled: true
+    
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-server:80
+        access: proxy
+        isDefault: true
+  
+  jaeger:
+    enabled: true
+    storage:
+      type: elasticsearch
+    
+    collector:
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "250m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+
+# Security configuration
+security:
+  # Pod Security Standards
+  podSecurityStandards:
+    enforce: "restricted"
+    audit: "restricted"
+    warn: "restricted"
+  
+  # Network Policies
+  networkPolicies:
+    enabled: true
+    ingress:
+      enabled: true
+    egress:
+      enabled: true
+  
+  # Service Account
+  serviceAccount:
+    create: true
+    annotations: {}
+    name: ""
+
+# RBAC configuration
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "services", "endpoints"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["deployments", "replicasets"]
+      verbs: ["get", "list", "watch"]
+
+# Secrets management
+secrets:
+  # Database credentials
+  database:
+    create: true
+    username: dharmaguard
+    password: ""  # Will be auto-generated if empty
+  
+  # JWT signing key
+  jwt:
+    create: true
+    secret: ""  # Will be auto-generated if empty
+  
+  # External API keys
+  external:
+    sebiApiKey: ""
+    nseApiKey: ""
+    bseApiKey: ""
+
+# ConfigMaps
+configMaps:
+  # Application configuration
+  app:
+    create: true
+    data:
+      LOG_LEVEL: "INFO"
+      ENVIRONMENT: "production"
+      METRICS_ENABLED: "true"
+
+# Backup and disaster recovery
+backup:
+  enabled: false
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: "7d"
+  
+  postgresql:
+    enabled: true
+  
+  redis:
+    enabled: true
+  
+  kafka:
+    enabled: true
+
+# Node affinity and tolerations
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: ["dharmaguard"]
+          topologyKey: kubernetes.io/hostname
+
+# Resource quotas
+resourceQuotas:
+  enabled: true
+  requests:
+    cpu: "20"
+    memory: "40Gi"
+  limits:
+    cpu: "40"
+    memory: "80Gi"
+
+# Limit ranges
+limitRanges:
+  enabled: true
+  default:
+    cpu: "100m"
+    memory: "128Mi"
+  defaultRequest:
+    cpu: "50m"
+    memory: "64Mi"
+  max:
+    cpu: "4"
+    memory: "8Gi"
