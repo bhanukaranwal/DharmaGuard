@@ -1,0 +1,108 @@
+[package]
+name = "user-service"
+version = "1.0.0"
+edition = "2021"
+authors = ["DharmaGuard Team <team@dharmaguard.com>"]
+description = "User Management Microservice for DharmaGuard Platform"
+license = "Apache-2.0"
+repository = "https://github.com/your-org/dharmaguard"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["json", "headers", "ws", "macros"] }
+axum-extra = { version = "0.9", features = ["typed-header", "cookie"] }
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "compression-gzip", "request-id"] }
+hyper = { version = "1.0", features = ["full"] }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_with = "3.0"
+
+# Database
+sqlx = { version = "0.7", features = [
+    "runtime-tokio-native-tls", 
+    "postgres", 
+    "macros", 
+    "uuid", 
+    "chrono", 
+    "json",
+    "migrate"
+] }
+
+# Authentication & Security
+argon2 = "0.5"
+jsonwebtoken = "9.1"
+password-hash = { version = "0.5", features = ["alloc"] }
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["std"] }
+
+# Validation
+validator = { version = "0.17", features = ["derive"] }
+
+# Utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Caching
+redis = { version = "0.24", features = ["tokio-comp", "json"] }
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
+tracing-opentelemetry = "0.21"
+opentelemetry = "0.20"
+opentelemetry-jaeger = "0.19"
+
+# Configuration
+config = "0.13"
+dotenvy = "0.15"
+
+# Metrics
+metrics = "0.21"
+metrics-exporter-prometheus = "0.12"
+
+# Email
+lettre = { version = "0.11", features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+
+# Rate limiting
+governor = "0.6"
+
+# gRPC client for core engine
+tonic = "0.10"
+tonic-build = "0.10"
+
+# Async utilities
+futures = "0.3"
+futures-util = "0.3"
+
+# Testing
+[dev-dependencies]
+tokio-test = "0.4"
+tower-test = "0.4"
+sqlx-test = "0.1"
+tempfile = "3.8"
+mockall = "0.11"
+
+[build-dependencies]
+tonic-build = "0.10"
+
+[[bin]]
+name = "user-service"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+debug = 2
