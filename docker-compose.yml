@@ -1,0 +1,504 @@
+version: '3.8'
+
+services:
+  # Database Services
+  postgres:
+    image: postgres:16
+    container_name: dharmaguard-postgres
+    environment:
+      POSTGRES_USER: dharmaguard
+      POSTGRES_PASSWORD: securepassword123
+      POSTGRES_DB: dharmaguard
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/postgresql/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dharmaguard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dharmaguard-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: dharmaguard-redis
+    command: redis-server --requirepass redis123 --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./database/redis/config:/usr/local/etc/redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dharmaguard-network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    container_name: dharmaguard-clickhouse
+    environment:
+      CLICKHOUSE_DB: dharmaguard_analytics
+      CLICKHOUSE_USER: dharmaguard
+      CLICKHOUSE_PASSWORD: clickhouse123
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./database/clickhouse/init:/docker-entrypoint-initdb.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dharmaguard-network
+
+  mongodb:
+    image: mongo:7
+    container_name: dharmaguard-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: dharmaguard
+      MONGO_INITDB_ROOT_PASSWORD: mongo123
+      MONGO_INITDB_DATABASE: dharmaguard_docs
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./database/mongodb/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dharmaguard-network
+
+  # Message Queue Services
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: dharmaguard-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dharmaguard-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: dharmaguard-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9997:9997"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_METRICS_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      KAFKA_CONFLUENT_METRICS_ENABLE: 'true'
+      KAFKA_CONFLUENT_SUPPORT_CUSTOMER_ID: anonymous
+      KAFKA_JMX_PORT: 9997
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - dharmaguard-network
+
+  # Core Engine Service
+  surveillance-engine:
+    build:
+      context: ./core-engine
+      dockerfile: Dockerfile
+    container_name: dharmaguard-surveillance-engine
+    ports:
+      - "50051:50051"  # gRPC port
+    environment:
+      - POSTGRES_URL=postgresql://dharmaguard:securepassword123@postgres:5432/dharmaguard
+      - REDIS_URL=redis://:redis123@redis:6379
+      - KAFKA_BROKERS=kafka:29092
+      - LOG_LEVEL=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./configs/surveillance:/app/configs
+    networks:
+      - dharmaguard-network
+
+  # Microservices
+  user-service:
+    build:
+      context: ./microservices/user-service
+      dockerfile: Dockerfile
+    container_name: dharmaguard-user-service
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=postgresql://dharmaguard:securepassword123@postgres:5432/dharmaguard
+      - REDIS_URL=redis://:redis123@redis:6379
+      - JWT_SECRET=your-super-secure-jwt-secret-key-here
+      - RUST_LOG=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dharmaguard-network
+
+  compliance-service:
+    build:
+      context: ./microservices/compliance-service
+      dockerfile: Dockerfile
+    container_name: dharmaguard-compliance-service
+    ports:
+      - "8082:8082"
+    environment:
+      - DATABASE_URL=postgresql://dharmaguard:securepassword123@postgres:5432/dharmaguard
+      - KAFKA_BROKERS=kafka:29092
+      - SEBI_API_KEY=${SEBI_API_KEY}
+      - RUST_LOG=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dharmaguard-network
+
+  reporting-service:
+    build:
+      context: ./microservices/reporting-service
+      dockerfile: Dockerfile
+    container_name: dharmaguard-reporting-service
+    ports:
+      - "8083:8083"
+    environment:
+      - DATABASE_URL=postgresql://dharmaguard:securepassword123@postgres:5432/dharmaguard
+      - CLICKHOUSE_URL=http://dharmaguard:clickhouse123@clickhouse:8123/dharmaguard_analytics
+      - KAFKA_BROKERS=kafka:29092
+      - RUST_LOG=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dharmaguard-network
+
+  audit-service:
+    build:
+      context: ./microservices/audit-service
+      dockerfile: Dockerfile
+    container_name: dharmaguard-audit-service
+    ports:
+      - "8084:8084"
+    environment:
+      - DATABASE_URL=postgresql://dharmaguard:securepassword123@postgres:5432/dharmaguard
+      - MONGODB_URL=mongodb://dharmaguard:mongo123@mongodb:27017/dharmaguard_docs
+      - KAFKA_BROKERS=kafka:29092
+      - BLOCKCHAIN_RPC_URL=http://localhost:8545
+      - RUST_LOG=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dharmaguard-network
+
+  notification-service:
+    build:
+      context: ./microservices/notification-service
+      dockerfile: Dockerfile
+    container_name: dharmaguard-notification-service
+    ports:
+      - "8085:8085"
+    environment:
+      - DATABASE_URL=postgresql://dharmaguard:securepassword123@postgres:5432/dharmaguard
+      - REDIS_URL=redis://:redis123@redis:6379
+      - KAFKA_BROKERS=kafka:29092
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - RUST_LOG=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dharmaguard-network
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: dharmaguard-api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - USER_SERVICE_URL=http://user-service:8081
+      - COMPLIANCE_SERVICE_URL=http://compliance-service:8082
+      - REPORTING_SERVICE_URL=http://reporting-service:8083
+      - AUDIT_SERVICE_URL=http://audit-service:8084
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8085
+      - SURVEILLANCE_ENGINE_URL=surveillance-engine:50051
+      - JWT_SECRET=your-super-secure-jwt-secret-key-here
+      - REDIS_URL=redis://:redis123@redis:6379
+      - RATE_LIMIT_REQUESTS_PER_MINUTE=1000
+    depends_on:
+      - user-service
+      - compliance-service
+      - reporting-service
+      - audit-service
+      - notification-service
+      - surveillance-engine
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dharmaguard-network
+
+  # ML Platform
+  ml-platform:
+    build:
+      context: ./ml-platform
+      dockerfile: Dockerfile
+    container_name: dharmaguard-ml-platform
+    ports:
+      - "8090:8090"
+    environment:
+      - DATABASE_URL=postgresql://dharmaguard:securepassword123@postgres:5432/dharmaguard
+      - CLICKHOUSE_URL=http://dharmaguard:clickhouse123@clickhouse:8123/dharmaguard_analytics
+      - REDIS_URL=redis://:redis123@redis:6379
+      - KAFKA_BROKERS=kafka:29092
+      - MODEL_STORE_PATH=/app/models
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ml_models:/app/models
+      - ./ml-platform/data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dharmaguard-network
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: dharmaguard-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
+      - NODE_ENV=development
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api-gateway
+    networks:
+      - dharmaguard-network
+
+  # Monitoring Services
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dharmaguard-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - dharmaguard-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dharmaguard-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - dharmaguard-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: dharmaguard-jaeger
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - dharmaguard-network
+
+  # Development Tools
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: dharmaguard-kafka-ui
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on:
+      - kafka
+    networks:
+      - dharmaguard-network
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: dharmaguard-redis-commander
+    ports:
+      - "8082:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:redis123
+    depends_on:
+      - redis
+    networks:
+      - dharmaguard-network
+
+networks:
+  dharmaguard-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  clickhouse_data:
+    driver: local
+  mongodb_data:
+    driver: local
+  kafka_data:
+    driver: local
+  zookeeper_data:
+    driver: local
+  zookeeper_logs:
+    driver: local
+  ml_models:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
