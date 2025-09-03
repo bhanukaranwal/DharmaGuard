@@ -1,0 +1,24 @@
+[package]
+name = "reporting-service"
+version = "1.0.0"
+edition = "2021"
+authors = ["DharmaGuard Team <team@dharmaguard.com>"]
+description = "Advanced Reporting Service for DharmaGuard Platform"
+
+[dependencies]
+axum = { version = "0.7", features = ["json", "headers", "ws", "macros"] }
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+anyhow = "1.0"
+thiserror = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+tokio-cron-scheduler = "0.9"
+pdf = "0.8"
+calamine = "0.22"
+csv = "1.3"
