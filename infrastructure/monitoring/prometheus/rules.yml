@@ -1,0 +1,204 @@
+# DharmaGuard Prometheus Alerting Rules
+# Comprehensive monitoring and alerting for all platform components
+
+groups:
+  - name: dharmaguard.critical
+    interval: 30s
+    rules:
+      # Surveillance Engine Critical Alerts
+      - alert: SurveillanceEngineDown
+        expr: up{job="surveillance-engine"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: surveillance-engine
+        annotations:
+          summary: "Surveillance Engine is down"
+          description: "Surveillance Engine has been down for more than 1 minute"
+          runbook_url: "https://docs.dharmaguard.com/runbooks/surveillance-engine-down"
+
+      - alert: HighTradeProcessingLatency
+        expr: histogram_quantile(0.95, rate(trade_processing_duration_seconds_bucket[5m])) > 0.001
+        for: 2m
+        labels:
+          severity: critical
+          service: surveillance-engine
+        annotations:
+          summary: "High trade processing latency detected"
+          description: "95th percentile trade processing latency is {{ $value }}s, above 1ms threshold"
+
+      - alert: PatternDetectionFailureRate
+        expr: rate(pattern_detection_failures_total[5m]) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+          service: surveillance-engine
+        annotations:
+          summary: "High pattern detection failure rate"
+          description: "Pattern detection failure rate is {{ $value }} per second"
+
+      # Database Critical Alerts
+      - alert: DatabaseConnectionsHigh
+        expr: pg_stat_database_numbackends / pg_settings_max_connections > 0.8
+        for: 2m
+        labels:
+          severity: warning
+          service: postgresql
+        annotations:
+          summary: "PostgreSQL connection usage is high"
+          description: "PostgreSQL is using {{ $value | humanizePercentage }} of max connections"
+
+      - alert: DatabaseDown
+        expr: up{job="postgresql"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: postgresql
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "PostgreSQL database has been unreachable for more than 30 seconds"
+
+      # Redis Critical Alerts
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been unreachable for more than 30 seconds"
+
+      - alert: RedisMemoryUsageHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+  - name: dharmaguard.performance
+    interval: 60s
+    rules:
+      # API Gateway Performance
+      - alert: HighAPILatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+          service: api-gateway
+        annotations:
+          summary: "High API response latency"
+          description: "95th percentile API latency is {{ $value }}s"
+
+      - alert: HighAPIErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          service: api-gateway
+        annotations:
+          summary: "High API error rate"
+          description: "API error rate is {{ $value | humanizePercentage }}"
+
+      # Microservices Performance
+      - alert: MicroserviceDown
+        expr: up{job=~"user-service|compliance-service|reporting-service|audit-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Microservice {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been unreachable for more than 1 minute"
+
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg(irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value }}%"
+
+  - name: dharmaguard.business
+    interval: 300s
+    rules:
+      # Business Logic Alerts
+      - alert: ComplianceScoreDrop
+        expr: compliance_score < 95
+        for: 5m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "Compliance score dropped below threshold"
+          description: "Compliance score is {{ $value }}%, below 95% threshold"
+
+      - alert: CriticalAlertsSpike
+        expr: increase(surveillance_alerts_total{severity="critical"}[1h]) > 10
+        for: 0m
+        labels:
+          severity: critical
+          category: business
+        annotations:
+          summary: "Spike in critical surveillance alerts"
+          description: "{{ $value }} critical alerts in the last hour"
+
+      - alert: TradeVolumeAnomaly
+        expr: |
+          (
+            rate(trades_processed_total[1h]) - 
+            avg_over_time(rate(trades_processed_total[1h])[24h:1h])
+          ) / avg_over_time(rate(trades_processed_total[1h])[24h:1h]) > 2
+        for: 10m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "Unusual trade volume detected"
+          description: "Trade volume is {{ $value | humanizePercentage }} above normal"
+
+  - name: dharmaguard.security
+    interval: 60s
+    rules:
+      # Security Alerts
+      - alert: FailedLoginAttempts
+        expr: increase(failed_login_attempts_total[5m]) > 20
+        for: 0m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "High number of failed login attempts"
+          description: "{{ $value }} failed login attempts in the last 5 minutes"
+
+      - alert: UnauthorizedAPIAccess
+        expr: increase(http_requests_total{status="401"}[5m]) > 50
+        for: 2m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "High number of unauthorized API requests"
+          description: "{{ $value }} unauthorized requests in the last 5 minutes"
+
+      - alert: BlockchainAuditFailure
+        expr: increase(blockchain_audit_failures_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "Blockchain audit trail failure"
+          description: "Blockchain audit trail has failed {{ $value }} times"
