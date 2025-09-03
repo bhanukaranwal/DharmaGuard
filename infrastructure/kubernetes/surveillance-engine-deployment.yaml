@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: surveillance-engine
+  namespace: dharmaguard
+  labels:
+    app: surveillance-engine
+    component: core
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: surveillance-engine
+  template:
+    metadata:
+      labels:
+        app: surveillance-engine
+        component: core
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: surveillance-engine
+        image: ghcr.io/your-org/dharmaguard-surveillance-engine:latest
+        ports:
+        - containerPort: 50051
+          name: grpc
+        - containerPort: 8080
+          name: metrics
+        env:
+        - name: POSTGRES_URL
+          value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres-service:5432/dharmaguard"
+        - name: REDIS_URL
+          value: "redis://:$(REDIS_PASSWORD)@redis-service:6379"
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: dharmaguard-config
+              key: KAFKA_BROKERS
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: dharmaguard-config
+              key: LOG_LEVEL
+        envFrom:
+        - secretRef:
+            name: dharmaguard-secrets
+        - configMapRef:
+            name: dharmaguard-config
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/configs
+        - name: logs-volume
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          grpc:
+            port: 50051
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          grpc:
+            port: 50051
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: config-volume
+        configMap:
+          name: dharmaguard-config
+      - name: logs-volume
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - surveillance-engine
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: surveillance-engine-service
+  namespace: dharmaguard
+  labels:
+    app: surveillance-engine
+spec:
+  selector:
+    app: surveillance-engine
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
